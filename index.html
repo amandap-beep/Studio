@@ -3,11 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AR.js + p5.js Multi-Marker Tracking</title>
+  <title>MindAR + p5.js Multi-Image Tracking</title>
   
-  <!-- AR.js -->
+  <!-- MindAR -->
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.2/dist/mindar-image.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.2/dist/mindar-image-aframe.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/aframevr/aframe@1c2407b26c61958baa93967b5412487cd94b290b/dist/aframe-master.min.js"></script>
-  <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar-nft.js"></script>
   
   <!-- p5.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
@@ -23,6 +24,7 @@
       top: 0;
       left: 0;
       z-index: 1;
+      pointer-events: none;
     }
     
     #info {
@@ -35,41 +37,65 @@
       font-family: monospace;
       z-index: 100;
       border-radius: 5px;
+      font-size: 14px;
+    }
+    
+    #instructions {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      right: 10px;
+      color: white;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 15px;
+      font-family: sans-serif;
+      z-index: 100;
+      border-radius: 5px;
+      font-size: 12px;
     }
   </style>
 </head>
 <body>
   <div id="info">
-    <div>Marker Status: <span id="status">Not Detected</span></div>
-    <div>Active Marker: <span id="activeMarker">None</span></div>
+    <div>Status: <span id="status">Initializing...</span></div>
+    <div>Active Target: <span id="activeTarget">None</span></div>
+    <div>Targets Found: <span id="targetCount">0</span></div>
   </div>
 
-  <!-- A-Frame Scene for AR.js -->
+  <div id="instructions">
+    <strong>Setup Instructions:</strong><br>
+    1. You need to create a <code>.mind</code> file with your target images<br>
+    2. Use the MindAR Compiler: <a href="https://hiukim.github.io/mind-ar-js-doc/tools/compile" target="_blank" style="color: #4CAF50;">https://hiukim.github.io/mind-ar-js-doc/tools/compile</a><br>
+    3. Upload your images and download the compiled <code>.mind</code> file<br>
+    4. Replace <code>targets.mind</code> in the code with your file path<br>
+    5. This example supports up to 3 target images
+  </div>
+
+  <!-- A-Frame Scene for MindAR -->
   <a-scene
-    embedded
-    arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3;"
-    vr-mode-ui="enabled: false">
+    mindar-image="imageTargetSrc: targets.mind; filterMinCF: 0.0001; filterBeta: 0.001; maxTrack: 3; uiLoading: no; uiError: no; uiScanning: no;"
+    color-space="sRGB"
+    renderer="colorManagement: true, physicallyCorrectLights"
+    vr-mode-ui="enabled: false"
+    device-orientation-permission-ui="enabled: false">
     
     <!-- Camera -->
-    <a-entity camera></a-entity>
+    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
     
-    <!-- Marker 1: Hiro pattern (default AR.js marker) -->
-    <a-marker id="marker1" type="pattern" preset="hiro">
+    <!-- Target 1 -->
+    <a-entity id="target0" mindar-image-target="targetIndex: 0">
+      <a-entity id="content0"></a-entity>
+    </a-entity>
+    
+    <!-- Target 2 -->
+    <a-entity id="target1" mindar-image-target="targetIndex: 1">
       <a-entity id="content1"></a-entity>
-    </a-marker>
+    </a-entity>
     
-    <!-- Marker 2: Kanji pattern (default AR.js marker) -->
-    <a-marker id="marker2" type="pattern" preset="kanji">
+    <!-- Target 3 -->
+    <a-entity id="target2" mindar-image-target="targetIndex: 2">
       <a-entity id="content2"></a-entity>
-    </a-marker>
-    
-    <!-- Marker 3: Custom pattern (you'll add your own .patt file) -->
-    <!-- Uncomment and replace with your custom marker -->
-    <!--
-    <a-marker id="marker3" type="pattern" url="path/to/your/marker.patt">
-      <a-entity id="content3"></a-entity>
-    </a-marker>
-    -->
+    </a-entity>
   </a-scene>
 
   <!-- p5.js Canvas -->
@@ -77,25 +103,35 @@
 
   <script>
     // Global variables
-    let currentMarker = null;
-    let markerDetected = false;
-    let animationFrame = 0;
+    let currentTarget = null;
+    let targetDetected = false;
+    let sceneReady = false;
     
-    // Marker-specific animation states
-    let markers = {
-      marker1: {
-        name: 'Hiro',
+    // Target-specific animation states
+    let targets = {
+      target0: {
+        name: 'Target 1',
         detected: false,
         animFrame: 0,
         color: null,
-        rotation: 0
+        rotation: 0,
+        particles: []
       },
-      marker2: {
-        name: 'Kanji',
+      target1: {
+        name: 'Target 2',
         detected: false,
         animFrame: 0,
         color: null,
-        rotation: 0
+        rotation: 0,
+        waves: []
+      },
+      target2: {
+        name: 'Target 3',
+        detected: false,
+        animFrame: 0,
+        color: null,
+        rotation: 0,
+        spiralAngle: 0
       }
     };
 
@@ -103,12 +139,35 @@
       let canvas = createCanvas(windowWidth, windowHeight, WEBGL);
       canvas.parent('arCanvas');
       
-      // Initialize colors for each marker
-      markers.marker1.color = color(255, 100, 100);
-      markers.marker2.color = color(100, 100, 255);
+      // Initialize colors for each target
+      targets.target0.color = color(255, 100, 100);
+      targets.target1.color = color(100, 255, 100);
+      targets.target2.color = color(100, 100, 255);
       
-      // Set up AR.js marker event listeners
-      setupMarkerListeners();
+      // Initialize particles for target0
+      for (let i = 0; i < 30; i++) {
+        targets.target0.particles.push({
+          angle: random(TWO_PI),
+          radius: random(50, 120),
+          speed: random(0.01, 0.03),
+          size: random(5, 15)
+        });
+      }
+      
+      // Initialize waves for target1
+      for (let i = 0; i < 8; i++) {
+        targets.target1.waves.push({
+          radius: i * 15,
+          speed: 0.02 + i * 0.005
+        });
+      }
+      
+      // Wait for scene to be ready
+      document.querySelector('a-scene').addEventListener('renderstart', () => {
+        sceneReady = true;
+        setupTargetListeners();
+        document.getElementById('status').textContent = 'Ready - Point camera at target images';
+      });
       
       frameRate(30);
     }
@@ -116,21 +175,23 @@
     function draw() {
       clear();
       
-      // Only draw if a marker is detected
-      if (markerDetected && currentMarker) {
-        let markerData = markers[currentMarker];
+      // Only draw if scene is ready and a target is detected
+      if (sceneReady && targetDetected && currentTarget) {
+        let targetData = targets[currentTarget];
         
         // Increment animation frame
-        markerData.animFrame++;
+        targetData.animFrame++;
         
-        // Draw based on which marker is active
+        // Draw based on which target is active
         push();
         
-        // Different animation for each marker
-        if (currentMarker === 'marker1') {
-          drawMarker1Animation(markerData);
-        } else if (currentMarker === 'marker2') {
-          drawMarker2Animation(markerData);
+        // Different animation for each target
+        if (currentTarget === 'target0') {
+          drawTarget0Animation(targetData);
+        } else if (currentTarget === 'target1') {
+          drawTarget1Animation(targetData);
+        } else if (currentTarget === 'target2') {
+          drawTarget2Animation(targetData);
         }
         
         pop();
@@ -140,94 +201,146 @@
       updateUI();
     }
 
-    function drawMarker1Animation(markerData) {
-      // Pulsing rotating cube
-      let scale = 50 + sin(markerData.animFrame * 0.05) * 20;
-      markerData.rotation += 0.02;
+    function drawTarget0Animation(targetData) {
+      // Pulsing rotating cube with particle system
+      let scale = 50 + sin(targetData.animFrame * 0.05) * 20;
+      targetData.rotation += 0.02;
       
+      // Main cube
       push();
-      rotateX(markerData.rotation);
-      rotateY(markerData.rotation * 0.7);
-      fill(markerData.color);
+      rotateX(targetData.rotation);
+      rotateY(targetData.rotation * 0.7);
+      fill(targetData.color);
       stroke(255);
       strokeWeight(2);
       box(scale);
       pop();
       
-      // Orbiting spheres
-      for (let i = 0; i < 3; i++) {
-        let angle = markerData.animFrame * 0.02 + (TWO_PI / 3) * i;
-        let x = cos(angle) * 80;
-        let z = sin(angle) * 80;
+      // Particle system
+      targetData.particles.forEach(p => {
+        p.angle += p.speed;
+        let x = cos(p.angle) * p.radius;
+        let z = sin(p.angle) * p.radius;
+        let y = sin(targetData.animFrame * 0.05 + p.angle) * 30;
         
         push();
-        translate(x, 0, z);
-        fill(255, 200, 200);
+        translate(x, y, z);
+        fill(255, 150, 150, 200);
         noStroke();
-        sphere(15);
+        sphere(p.size);
         pop();
-      }
+      });
     }
 
-    function drawMarker2Animation(markerData) {
-      // Spinning pyramid with color shift
-      markerData.rotation += 0.03;
+    function drawTarget1Animation(targetData) {
+      // Spinning torus with expanding waves
+      targetData.rotation += 0.03;
       
-      let colorShift = map(sin(markerData.animFrame * 0.03), -1, 1, 0, 255);
-      
+      // Central torus
       push();
-      rotateY(markerData.rotation);
-      rotateX(PI);
-      fill(colorShift, 100, 255 - colorShift);
+      rotateY(targetData.rotation);
+      rotateX(targetData.rotation * 0.5);
+      fill(targetData.color);
       stroke(255);
       strokeWeight(2);
-      
-      // Draw pyramid (cone)
-      translate(0, -30, 0);
-      cone(50, 80);
+      torus(40, 15);
       pop();
       
-      // Floating text/particles
-      for (let i = 0; i < 5; i++) {
-        let yOffset = (markerData.animFrame * 2 + i * 30) % 150 - 75;
-        let angle = i * TWO_PI / 5;
-        let x = cos(angle) * 60;
-        let z = sin(angle) * 60;
+      // Expanding wave rings
+      targetData.waves.forEach((wave, i) => {
+        wave.radius += wave.speed;
+        if (wave.radius > 150) {
+          wave.radius = 10;
+        }
         
         push();
-        translate(x, yOffset, z);
-        fill(255, 255, 100, 200);
-        noStroke();
-        sphere(8);
+        rotateX(HALF_PI);
+        noFill();
+        stroke(150, 255, 150, map(wave.radius, 10, 150, 255, 0));
+        strokeWeight(3);
+        circle(0, 0, wave.radius * 2);
         pop();
-      }
+      });
     }
 
-    function setupMarkerListeners() {
-      // Set up listeners for each marker
-      Object.keys(markers).forEach(markerId => {
-        let markerEl = document.querySelector(`#${markerId}`);
+    function drawTarget2Animation(targetData) {
+      // Spiral galaxy effect
+      targetData.rotation += 0.02;
+      targetData.spiralAngle += 0.05;
+      
+      // Center sphere
+      push();
+      fill(targetData.color);
+      stroke(255);
+      strokeWeight(2);
+      sphere(30);
+      pop();
+      
+      // Spiral arms
+      for (let arm = 0; arm < 3; arm++) {
+        let armAngle = (TWO_PI / 3) * arm + targetData.spiralAngle;
         
-        if (markerEl) {
-          // Marker found
-          markerEl.addEventListener('markerFound', () => {
-            console.log(`${markerId} detected`);
-            markerDetected = true;
-            currentMarker = markerId;
-            markers[markerId].detected = true;
-            markers[markerId].animFrame = 0; // Reset animation
+        for (let i = 0; i < 20; i++) {
+          let t = i / 20;
+          let radius = t * 100;
+          let angle = armAngle + t * TWO_PI * 2;
+          
+          let x = cos(angle) * radius;
+          let z = sin(angle) * radius;
+          let y = sin(targetData.animFrame * 0.02 + i * 0.3) * 20;
+          
+          push();
+          translate(x, y, z);
+          let size = map(t, 0, 1, 15, 5);
+          let alpha = map(t, 0, 1, 255, 100);
+          fill(150, 150, 255, alpha);
+          noStroke();
+          sphere(size);
+          pop();
+        }
+      }
+      
+      // Orbiting rings
+      push();
+      rotateY(targetData.rotation * 2);
+      noFill();
+      stroke(200, 200, 255, 150);
+      strokeWeight(2);
+      torus(70, 3);
+      pop();
+    }
+
+    function setupTargetListeners() {
+      // Set up listeners for each target
+      Object.keys(targets).forEach(targetId => {
+        let targetEl = document.querySelector(`#${targetId}`);
+        
+        if (targetEl) {
+          // Target found
+          targetEl.addEventListener('targetFound', () => {
+            console.log(`${targetId} detected`);
+            targetDetected = true;
+            currentTarget = targetId;
+            targets[targetId].detected = true;
+            targets[targetId].animFrame = 0; // Reset animation
           });
           
-          // Marker lost
-          markerEl.addEventListener('markerLost', () => {
-            console.log(`${markerId} lost`);
-            markers[markerId].detected = false;
+          // Target lost
+          targetEl.addEventListener('targetLost', () => {
+            console.log(`${targetId} lost`);
+            targets[targetId].detected = false;
             
-            // Check if any other marker is still visible
-            let anyDetected = Object.keys(markers).some(id => markers[id].detected);
+            // Check if any other target is still visible
+            let anyDetected = Object.keys(targets).some(id => targets[id].detected);
             if (!anyDetected) {
-              markerDetected = false;
-              currentMarker = null;
+              targetDetected = false;
+              currentTarget = null;
+            } else {
+              // Switch to another detected target
+              let nextTarget = Object.keys(targets).find(id => targets[id].detected);
+              if (nextTarget) {
+                currentTarget = nextTarget;
+              }
             }
           });
         }
@@ -235,10 +348,15 @@
     }
 
     function updateUI() {
-      document.getElementById('status').textContent = markerDetected ? 'Detected' : 'Not Detected';
-      document.getElementById('activeMarker').textContent = currentMarker 
-        ? markers[currentMarker].name 
-        : 'None';
+      if (sceneReady) {
+        document.getElementById('status').textContent = targetDetected ? 'Tracking Active' : 'Searching...';
+        document.getElementById('activeTarget').textContent = currentTarget 
+          ? targets[currentTarget].name 
+          : 'None';
+        
+        let detectedCount = Object.values(targets).filter(t => t.detected).length;
+        document.getElementById('targetCount').textContent = detectedCount;
+      }
     }
 
     function windowResized() {
